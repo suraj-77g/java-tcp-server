@@ -73,29 +73,57 @@ public class NonBlockingTCPServer {
         clientChannel.register(selector, SelectionKey.OP_READ);
     }
 
+    /**
+     * Reads data from a client channel when it becomes readable.
+     * 
+     * Is this blocking or non-blocking?
+     * The 'clientChannel.read(buffer)' call is NON-BLOCKING because we set 
+     * 'configureBlocking(false)'. It returns immediately. If there's no data, 
+     * it returns 0. If the client disconnected, it returns -1.
+     * 
+     * Is the single thread blocked when bytes are being read?
+     * Technically, yes, but only for the very short time it takes the OS to copy 
+     * bytes from its kernel buffers into our application's 'ByteBuffer'. This 
+     * is extremely fast. However, the thread IS blocked from handling OTHER 
+     * client events while it is executing this method.
+     */
     private static void handleRead(SelectionKey key) throws IOException {
         SocketChannel clientChannel = (SocketChannel) key.channel();
+        // Allocate a buffer to hold incoming data. In a real NIO server, 
+        // you might reuse buffers to avoid frequent GC (Garbage Collection).
         ByteBuffer buffer = ByteBuffer.allocate(BUFFER_SIZE);
         String address = clientChannel.getRemoteAddress().toString();
 
+        // 1. NON-BLOCKING READ: Attempts to read data into the buffer.
+        // Returns the number of bytes read (0 if none available, -1 if EOF).
         int bytesRead = clientChannel.read(buffer);
         
         if (bytesRead == -1) {
-            // Client closed the connection
+            // Client closed the connection (EOF)
             System.out.println("[SERVER] Client disconnected: " + address);
-            clientChannel.close();
-            key.cancel();
+            clientChannel.close(); // Close the channel
+            key.cancel();          // Stop the selector from watching this key
             return;
         }
 
-        // Flip the buffer to prepare for reading from it
+        // 2. PREPARE FOR PROCESSING: 'flip()' switches the buffer from 
+        // 'writing mode' (receiving from channel) to 'reading mode' (processing by us).
         buffer.flip();
+        
+        // 3. EXTRACT DATA: Read the bytes out of the buffer.
         byte[] data = new byte[buffer.remaining()];
         buffer.get(data);
         String message = new String(data).trim();
 
         if (!message.isEmpty()) {
             System.out.println("[" + address + "] (NIO) says: " + message);
+            
+            // SHOULD WE USE A WORKER POOL?
+            // If the processing of this message was slow (e.g., database query, 
+            // complex calculation), we SHOULD hand it off to a separate 
+            // ExecutorService (Worker Pool). This prevents the Selector thread 
+            // from being stalled, ensuring the server stays responsive to 
+            // other new connections and messages.
         }
     }
 }
